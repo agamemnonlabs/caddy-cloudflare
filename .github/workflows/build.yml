@@ -1,0 +1,71 @@
+name: Build Caddy with Cloudflare DNS
+
+on:
+  schedule:
+    # Run daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  push:
+    branches: [ main ]
+  workflow_dispatch: # Manual trigger button
+
+jobs:
+  check-and-build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Get latest Caddy version
+        id: caddy-version
+        run: |
+          # Get latest Caddy version from Docker Hub
+          CADDY_VERSION=$(curl -s https://registry.hub.docker.com/v2/repositories/library/caddy/tags/ | jq -r '.results[].name' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1)
+          echo "version=$CADDY_VERSION" >> $GITHUB_OUTPUT
+          echo "Latest Caddy version: $CADDY_VERSION"
+      
+      - name: Check if image exists
+        id: check-image
+        run: |
+          IMAGE="ghcr.io/${{ github.repository_owner }}/caddy-cloudflare:${{ steps.caddy-version.outputs.version }}"
+          if docker manifest inspect $IMAGE > /dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Image already exists, skipping build"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "Image does not exist, will build"
+          fi
+        continue-on-error: true
+      
+      - name: Build and push Docker image
+        if: steps.check-image.outputs.exists != 'true'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/caddy-cloudflare:latest
+            ghcr.io/${{ github.repository_owner }}/caddy-cloudflare:${{ steps.caddy-version.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      
+      - name: Image summary
+        run: |
+          echo "### Built Image 🚀" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version**: ${{ steps.caddy-version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image**: \`ghcr.io/${{ github.repository_owner }}/caddy-cloudflare:latest\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Pull command**: \`docker pull ghcr.io/${{ github.repository_owner }}/caddy-cloudflare:latest\`" >> $GITHUB_STEP_SUMMARY
