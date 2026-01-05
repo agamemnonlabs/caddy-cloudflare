@@ -32,8 +32,21 @@ jobs:
       - name: Get latest Caddy version
         id: caddy-version
         run: |
-          # Get latest Caddy version from Docker Hub
-          CADDY_VERSION=$(curl -s https://registry.hub.docker.com/v2/repositories/library/caddy/tags/ | jq -r '.results[].name' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1)
+          # Try GitHub API first (most reliable)
+          CADDY_VERSION=$(curl -s https://api.github.com/repos/caddyserver/caddy/releases/latest | jq -r '.tag_name' | sed 's/^v//')
+          
+          # Fallback to Docker Hub if GitHub fails
+          if [ -z "$CADDY_VERSION" ] || [ "$CADDY_VERSION" = "null" ]; then
+            echo "GitHub API failed, trying Docker Hub..."
+            CADDY_VERSION=$(curl -s "https://hub.docker.com/v2/repositories/library/caddy/tags/?page_size=100&ordering=last_updated" | jq -r '.results[].name' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | head -n1)
+          fi
+          
+          # Final fallback to date-based tag
+          if [ -z "$CADDY_VERSION" ] || [ "$CADDY_VERSION" = "null" ]; then
+            echo "All version detection failed, using date-based tag"
+            CADDY_VERSION=$(date +'%Y%m%d')
+          fi
+          
           echo "version=$CADDY_VERSION" >> $GITHUB_OUTPUT
           echo "Latest Caddy version: $CADDY_VERSION"
       
@@ -41,6 +54,7 @@ jobs:
         id: check-image
         run: |
           IMAGE="ghcr.io/${{ github.repository_owner }}/caddy-cloudflare:${{ steps.caddy-version.outputs.version }}"
+          echo "Checking if image exists: $IMAGE"
           if docker manifest inspect $IMAGE > /dev/null 2>&1; then
             echo "exists=true" >> $GITHUB_OUTPUT
             echo "Image already exists, skipping build"
@@ -63,6 +77,7 @@ jobs:
           cache-to: type=gha,mode=max
       
       - name: Image summary
+        if: steps.check-image.outputs.exists != 'true'
         run: |
           echo "### Built Image 🚀" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
